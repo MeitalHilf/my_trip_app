@@ -28,4 +28,21 @@ class Activity {
       done: done ?? this.done,
     );
   }
+
+  // JSON
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'title': title,
+    'description': description,
+    'dateTime': dateTime.toIso8601String(),
+    'done': done,
+  };
+
+  factory Activity.fromJson(Map<String, dynamic> j) => Activity(
+    id: j['id'] as String,
+    title: j['title'] as String,
+    description: j['description'] as String?,
+    dateTime: DateTime.parse(j['dateTime'] as String),
+    done: j['done'] as bool? ?? false,
+  );
 }

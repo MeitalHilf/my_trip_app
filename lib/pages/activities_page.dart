@@ -17,7 +17,8 @@ class ActivitiesPage extends StatelessWidget {
   Widget build(BuildContext context) {
     if (activities.isEmpty) {
       return const Center(
-        child: Text('אין פעילויות עדיין.\nלחץ על + כדי להוסיף', textAlign: TextAlign.center),
+        child: Text('אין פעילויות עדיין.\nלחץ על + כדי להוסיף',
+            textAlign: TextAlign.center),
       );
     }
 
@@ -51,7 +52,6 @@ class ActivitiesPage extends StatelessWidget {
             trailing: IconButton(
               icon: const Icon(Icons.delete_outline),
               onPressed: () => onDelete(a.id),
-              tooltip: 'מחק',
             ),
           ),
         );

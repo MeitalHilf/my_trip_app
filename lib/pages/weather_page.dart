@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class WeatherPage extends StatefulWidget {
   const WeatherPage({super.key});
@@ -8,10 +11,17 @@ class WeatherPage extends StatefulWidget {
 }
 
 class _WeatherPageState extends State<WeatherPage> {
-  final _cityCtrl = TextEditingController();
+  final TextEditingController _cityCtrl = TextEditingController();
   bool _loading = false;
   String? _error;
-  Map<String, dynamic>? _weather; // תוצאת דוגמה לפני חיבור API
+  WeatherResult? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    // ברירת מחדל: תל אביב (לפי האפיון)
+    _cityCtrl.text = 'Tel Aviv';
+  }
 
   @override
   void dispose() {
@@ -19,8 +29,70 @@ class _WeatherPageState extends State<WeatherPage> {
     super.dispose();
   }
 
+  Future<void> _onSearch() async {
+    final city = _cityCtrl.text.trim();
+    if (city.isEmpty) {
+      setState(() {
+        _error = 'הקלידי שם עיר';
+        _result = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final base  = dotenv.env['WEATHER_API_BASE'] ?? 'https://api.openweathermap.org/data/2.5';
+      // תומך בשני שמות מפתח אפשריים ב-env (OPENWEATHER_API_KEY או WEATHER_API_KEY)
+      final key   = dotenv.env['OPENWEATHER_API_KEY'] ?? dotenv.env['WEATHER_API_KEY'];
+      final units = dotenv.env['WEATHER_UNITS'] ?? 'metric';
+      final lang  = dotenv.env['WEATHER_LANG'] ?? 'he';
+
+      if (key == null || key.isEmpty) {
+        throw Exception('לא נמצא מפתח API בקובץ env');
+      }
+
+      final uri = Uri.parse('$base/weather').replace(queryParameters: {
+        'q': city,
+        'appid': key,
+        'units': units,
+        'lang': lang,
+      });
+
+      final res = await http.get(uri);
+      if (res.statusCode != 200) {
+        // מנסה לחלץ הודעת שגיאה קריאה
+        String msg = 'שגיאת שרת (${res.statusCode})';
+        try {
+          final body = jsonDecode(res.body);
+          if (body is Map && body['message'] != null) {
+            msg = '$msg: ${body['message']}';
+          }
+        } catch (_) {}
+        throw Exception(msg);
+      }
+
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      setState(() {
+        _result = WeatherResult.fromOpenWeather(data);
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _result = null;
+        _error = e.toString();
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+
     return Scaffold(
       body: Center(
         child: SingleChildScrollView(
@@ -30,7 +102,7 @@ class _WeatherPageState extends State<WeatherPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text('מזג אוויר', style: Theme.of(context).textTheme.headlineSmall),
+                Text('מזג אוויר', style: t.headlineSmall),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _cityCtrl,
@@ -53,10 +125,18 @@ class _WeatherPageState extends State<WeatherPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
+
                 if (_loading) const CircularProgressIndicator(),
                 if (_error != null)
-                  Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                if (_weather != null) _WeatherCard(data: _weather!),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Theme.of(context).colorScheme.error),
+                    ),
+                  ),
+                if (_result != null) WeatherCard(result: _result!),
               ],
             ),
           ),
@@ -64,31 +144,43 @@ class _WeatherPageState extends State<WeatherPage> {
       ),
     );
   }
-
-  void _onSearch() {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-
-    // TODO: בשלב הבא נחבר ל-API אמיתי (עם הטוקן)
-    // כרגע רק מדמה תשובה כדי לראות את ה-UI
-    Future.delayed(const Duration(seconds: 1), () {
-      setState(() {
-        _loading = false;
-        _weather = {
-          'city': _cityCtrl.text.isEmpty ? 'Example City' : _cityCtrl.text,
-          'temp': 22,
-          'desc': 'דוגמה בלבד',
-        };
-      });
-    });
-  }
 }
 
-class _WeatherCard extends StatelessWidget {
-  final Map<String, dynamic> data;
-  const _WeatherCard({required this.data});
+class WeatherResult {
+  final String city;
+  final double temp;
+  final String description;
+  final String iconCode; // לדוגמה: "10d"
+
+  WeatherResult({
+    required this.city,
+    required this.temp,
+    required this.description,
+    required this.iconCode,
+  });
+
+  // בנאי ייעודי לפורמט של OpenWeather
+  factory WeatherResult.fromOpenWeather(Map<String, dynamic> json) {
+    final temp = (json['main']?['temp'] as num?)?.toDouble() ?? double.nan;
+    final weatherList = (json['weather'] is List) ? (json['weather'] as List) : [];
+    final first = (weatherList.isNotEmpty && weatherList.first is Map) ? weatherList.first as Map : {};
+    final desc = first['description'] as String? ?? '';
+    final icon = first['icon'] as String? ?? '';
+    return WeatherResult(
+      city: json['name'] as String? ?? '',
+      temp: temp,
+      description: desc,
+      iconCode: icon,
+    );
+  }
+
+  // URL לאייקון של OpenWeather
+  String get iconUrl => 'https://openweathermap.org/img/wn/$iconCode@2x.png';
+}
+
+class WeatherCard extends StatelessWidget {
+  final WeatherResult result;
+  const WeatherCard({super.key, required this.result});
 
   @override
   Widget build(BuildContext context) {
@@ -99,11 +191,15 @@ class _WeatherCard extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('${data['city']}', style: t.titleLarge),
+            Text(result.city, style: t.titleLarge),
             const SizedBox(height: 8),
-            Text('${data['temp']}°C', style: t.displaySmall),
+            // אייקון מזג האוויר
+            if (result.iconCode.isNotEmpty)
+              Image.network(result.iconUrl, width: 80, height: 80),
+            const SizedBox(height: 8),
+            Text('${result.temp.round()}°C', style: t.displaySmall),
             const SizedBox(height: 4),
-            Text('${data['desc']}', style: t.bodyLarge),
+            Text(result.description, style: t.bodyLarge, textAlign: TextAlign.center),
           ],
         ),
       ),

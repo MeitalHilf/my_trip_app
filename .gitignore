@@ -3,7 +3,7 @@ build/
 .idea/
 *.iml
 **/local.properties
-.env
+assets/env
 .env.*
 ios/Pods/
 # Miscellaneous

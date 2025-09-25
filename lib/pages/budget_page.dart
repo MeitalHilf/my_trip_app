@@ -1,136 +1,210 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import '../models/budget.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class BudgetPage extends StatelessWidget {
-  final List<BudgetCategory> categories;
-  final VoidCallback onAddCategory;
-  final void Function(String categoryId) onAddExpense;
-  final void Function(String categoryId) onDeleteCategory;
-  final void Function(String categoryId, String expenseId) onDeleteExpense;
+class BudgetPage extends StatefulWidget {
+  const BudgetPage({super.key});
 
-  const BudgetPage({
-    super.key,
-    required this.categories,
-    required this.onAddCategory,
-    required this.onAddExpense,
-    required this.onDeleteCategory,
-    required this.onDeleteExpense,
-  });
+  @override
+  State<BudgetPage> createState() => _BudgetPageState();
+}
 
-  double get totalPlanned =>
-      categories.fold(0.0, (s, c) => s + c.planned);
-  double get totalActual =>
-      categories.fold(0.0, (s, c) => s + c.actual);
+class _BudgetPageState extends State<BudgetPage> {
+  static const _storeKey = 'budget_items_v1';
+
+  final List<ExpenseItem> _items = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadItems();
+  }
+
+  Future<void> _loadItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_storeKey);
+    if (raw != null && raw.isNotEmpty) {
+      final list = (jsonDecode(raw) as List)
+          .whereType<Map<String, dynamic>>()
+          .map(ExpenseItem.fromJson)
+          .toList();
+      setState(() {
+        _items
+          ..clear()
+          ..addAll(list);
+      });
+    }
+    setState(() => _loading = false);
+  }
+
+  Future<void> _saveItems() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
+    await prefs.setString(_storeKey, raw);
+  }
+
+  double get _total =>
+      _items.fold(0.0, (sum, e) => sum + (e.amount ?? 0));
+
+  Future<void> _addItemDialog() async {
+    final formKey = GlobalKey<FormState>();
+    final noteCtrl = TextEditingController();
+    final amountCtrl = TextEditingController();
+    String category = _categories.first;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+          ),
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('הוספת הוצאה', style: Theme.of(ctx).textTheme.titleLarge),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: category,
+                  decoration: const InputDecoration(
+                    labelText: 'קטגוריה',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: _categories
+                      .map((c) => DropdownMenuItem(
+                    value: c,
+                    child: Text(c),
+                  ))
+                      .toList(),
+                  onChanged: (v) => category = v ?? _categories.first,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: amountCtrl,
+                  keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'סכום (₪)',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return 'שדה חובה';
+                    final x = double.tryParse(v.replaceAll(',', '.'));
+                    if (x == null || x <= 0) return 'סכום לא תקין';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'הערה (אופציונלי)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    icon: const Icon(Icons.add),
+                    label: const Text('הוספה'),
+                    onPressed: () {
+                      if (formKey.currentState?.validate() != true) return;
+                      final amt = double.parse(
+                          amountCtrl.text.replaceAll(',', '.'));
+                      final item = ExpenseItem(
+                        id: DateTime.now().microsecondsSinceEpoch.toString(),
+                        category: category,
+                        amount: amt,
+                        note: noteCtrl.text.trim().isEmpty
+                            ? null
+                            : noteCtrl.text.trim(),
+                        date: DateTime.now(),
+                      );
+                      setState(() {
+                        _items.insert(0, item);
+                      });
+                      _saveItems();
+                      Navigator.pop(ctx);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _deleteItem(ExpenseItem item) {
+    setState(() {
+      _items.removeWhere((e) => e.id == item.id);
+    });
+    _saveItems();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme;
+
     return Scaffold(
-      body: Column(
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Column(
         children: [
-          Card(
-            margin: const EdgeInsets.all(12),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  Text('סה״כ תקציב מתוכנן: ${_fmt(totalPlanned)} ₪'),
-                  Text('סה״כ הוצאות בפועל: ${_fmt(totalActual)} ₪'),
-                  const Divider(),
-                  Text('פער כולל: ${_fmt(totalPlanned - totalActual)} ₪',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 18)),
-                ],
-              ),
+          // סיכום עליון
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('סה״כ הוצאות',
+                      style: t.titleMedium),
+                ),
+                Text('₪${_total.toStringAsFixed(2)}',
+                    style: t.headlineSmall),
+              ],
             ),
           ),
+          const Divider(height: 1),
+          // רשימת הוצאות
           Expanded(
-            child: categories.isEmpty
-                ? const Center(
-              child: Text('אין קטגוריות. לחץ + להוספה.'),
+            child: _items.isEmpty
+                ? Center(
+              child: Text('אין הוצאות עדיין',
+                  style: t.bodyLarge),
             )
-                : ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              itemCount: categories.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 8),
-              itemBuilder: (ctx, i) {
-                final c = categories[i];
-                final over = c.actual > c.planned;
-                return Card(
-                  child: ExpansionTile(
-                    title: Row(
-                      children: [
-                        Expanded(child: Text(c.name)),
-                        _BudgetStat(label: 'מתוכנן', value: _fmt(c.planned)),
-                        const SizedBox(width: 8),
-                        _BudgetStat(
-                          label: 'בפועל',
-                          value: _fmt(c.actual),
-                          color: over ? Colors.red : null,
-                        ),
-                      ],
+                : ListView.builder(
+              itemCount: _items.length,
+              itemBuilder: (context, i) {
+                final e = _items[i];
+                return Dismissible(
+                  key: ValueKey(e.id),
+                  background: Container(
+                    color: Colors.red,
+                    alignment: Alignment.centerRight,
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 16),
+                    child: const Icon(Icons.delete, color: Colors.white),
+                  ),
+                  direction: DismissDirection.endToStart,
+                  onDismissed: (_) => _deleteItem(e),
+                  child: ListTile(
+                    title: Text('${e.category} • ₪${(e.amount ?? 0).toStringAsFixed(2)}'),
+                    subtitle: Text(
+                      [
+                        if (e.note != null) e.note!,
+                        _formatDate(e.date),
+                      ].join(' • '),
                     ),
-                    childrenPadding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
-                    children: [
-                      Row(
-                        children: [
-                          OutlinedButton.icon(
-                            onPressed: () => onAddExpense(c.id),
-                            icon: const Icon(Icons.add),
-                            label: const Text('הוסף הוצאה'),
-                          ),
-                          const SizedBox(width: 8),
-                          TextButton.icon(
-                            onPressed: () => onDeleteCategory(c.id),
-                            icon: const Icon(Icons.delete_outline),
-                            label: const Text('מחק קטגוריה'),
-                            style: TextButton.styleFrom(
-                                foregroundColor: Colors.red),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      if (c.expenses.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8.0),
-                          child: Text('אין הוצאות בקטגוריה זו.'),
-                        )
-                      else
-                        ListView.separated(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          itemCount: c.expenses.length,
-                          separatorBuilder: (_, __) =>
-                          const SizedBox(height: 6),
-                          itemBuilder: (_, j) {
-                            final e = c.expenses[j];
-                            return Dismissible(
-                              key: ValueKey(e.id),
-                              direction: DismissDirection.endToStart,
-                              background: Container(
-                                alignment: Alignment.centerRight,
-                                padding: const EdgeInsets.only(right: 16),
-                                color: Colors.red.withOpacity(0.2),
-                                child: const Icon(Icons.delete_outline,
-                                    color: Colors.red),
-                              ),
-                              onDismissed: (_) =>
-                                  onDeleteExpense(c.id, e.id),
-                              child: ListTile(
-                                leading: const Icon(Icons.payment),
-                                title: Text(e.title),
-                                subtitle: Text(
-                                  '${_fmt(e.amount)} ₪  ·  ${_date(e.date)}'
-                                      '${e.description != null && e.description!.isNotEmpty ? '\n${e.description}' : ''}',
-                                ),
-                                isThreeLine: e.description != null &&
-                                    e.description!.isNotEmpty,
-                              ),
-                            );
-                          },
-                        ),
-                      const SizedBox(height: 8),
-                    ],
                   ),
                 );
               },
@@ -138,33 +212,60 @@ class BudgetPage extends StatelessWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: onAddCategory,
-        child: const Icon(Icons.add),
-        tooltip: 'הוסף קטגוריה',
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addItemDialog,
+        icon: const Icon(Icons.add),
+        label: const Text('הוצאה'),
       ),
     );
   }
 
-  String _fmt(double v) => v.toStringAsFixed(2);
-  String _date(DateTime d) =>
-      '${d.day.toString().padLeft(2, '0')}/${d.month.toString().padLeft(2, '0')}/${d.year}';
+  static const _categories = <String>[
+    'טיסות',
+    'לינה',
+    'אוכל',
+    'תחבורה',
+    'אטרקציות',
+    'אחר',
+  ];
+
+  String _formatDate(DateTime? d) {
+    if (d == null) return '';
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$day.$m.$y';
+  }
 }
 
-class _BudgetStat extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color? color;
-  const _BudgetStat({required this.label, required this.value, this.color});
+class ExpenseItem {
+  final String id;
+  final String category;
+  final double? amount;
+  final String? note;
+  final DateTime? date;
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey)),
-        Text('$value ₪',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: color)),
-      ],
-    );
-  }
+  ExpenseItem({
+    required this.id,
+    required this.category,
+    required this.amount,
+    this.note,
+    this.date,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'category': category,
+    'amount': amount,
+    'note': note,
+    'date': date?.toIso8601String(),
+  };
+
+  factory ExpenseItem.fromJson(Map<String, dynamic> json) => ExpenseItem(
+    id: json['id'] as String,
+    category: json['category'] as String,
+    amount: (json['amount'] as num?)?.toDouble(),
+    note: json['note'] as String?,
+    date: json['date'] != null ? DateTime.tryParse(json['date']) : null,
+  );
 }

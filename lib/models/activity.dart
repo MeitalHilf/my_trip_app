@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 class Activity {
   final String id;
   final String title;
@@ -8,8 +10,8 @@ class Activity {
   Activity({
     required this.id,
     required this.title,
-    required this.dateTime,
     this.description,
+    required this.dateTime,
     this.done = false,
   });
 
@@ -29,7 +31,14 @@ class Activity {
     );
   }
 
-  // JSON
+  factory Activity.fromJson(Map<String, dynamic> json) => Activity(
+    id: json['id'] as String,
+    title: json['title'] as String,
+    description: json['description'] as String?,
+    dateTime: DateTime.parse(json['dateTime'] as String),
+    done: json['done'] as bool? ?? false,
+  );
+
   Map<String, dynamic> toJson() => {
     'id': id,
     'title': title,
@@ -38,11 +47,11 @@ class Activity {
     'done': done,
   };
 
-  factory Activity.fromJson(Map<String, dynamic> j) => Activity(
-    id: j['id'] as String,
-    title: j['title'] as String,
-    description: j['description'] as String?,
-    dateTime: DateTime.parse(j['dateTime'] as String),
-    done: j['done'] as bool? ?? false,
-  );
+  static String encodeList(List<Activity> items) =>
+      jsonEncode(items.map((e) => e.toJson()).toList());
+
+  static List<Activity> decodeList(String source) =>
+      (jsonDecode(source) as List<dynamic>)
+          .map((e) => Activity.fromJson(e as Map<String, dynamic>))
+          .toList();
 }

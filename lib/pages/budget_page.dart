@@ -11,20 +11,27 @@ class BudgetPage extends StatefulWidget {
 }
 
 class _BudgetPageState extends State<BudgetPage> {
-  static const _storeKey = 'budget_items_v1';
+  static const _itemsKey = 'budget_items_v1';
+  static const _plannedKey = 'budget_planned_v1';
 
   final List<BudgetExpenseItem> _items = [];
+  final Map<String, double> _planned = {}; // קטגוריה -> מתוכנן
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadItems();
+    _loadAll();
+  }
+
+  Future<void> _loadAll() async {
+    await Future.wait([_loadItems(), _loadPlanned()]);
+    setState(() => _loading = false);
   }
 
   Future<void> _loadItems() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_storeKey);
+    final raw = prefs.getString(_itemsKey);
     _items.clear();
     if (raw != null && raw.isNotEmpty) {
       try {
@@ -35,13 +42,32 @@ class _BudgetPageState extends State<BudgetPage> {
         _items.addAll(list);
       } catch (_) {}
     }
-    setState(() => _loading = false);
   }
 
   Future<void> _saveItems() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = jsonEncode(_items.map((e) => e.toJson()).toList());
-    await prefs.setString(_storeKey, raw);
+    await prefs.setString(_itemsKey, raw);
+  }
+
+  Future<void> _loadPlanned() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_plannedKey);
+    _planned.clear();
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final map = jsonDecode(raw) as Map<String, dynamic>;
+        map.forEach((k, v) {
+          final d = v is num ? v.toDouble() : double.tryParse(v.toString());
+          if (d != null) _planned[k] = d;
+        });
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _savePlanned() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_plannedKey, jsonEncode(_planned));
   }
 
   double get _total => _items.fold(0.0, (s, e) => s + (e.amount ?? 0));
@@ -51,10 +77,8 @@ class _BudgetPageState extends State<BudgetPage> {
     for (final e in _items) {
       map.putIfAbsent(e.category, () => []).add(e);
     }
-    // סדר קטגוריות לפי שם
     final sorted = Map.fromEntries(
-      map.entries.toList()
-        ..sort((a, b) => a.key.compareTo(b.key)),
+      map.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
     );
     return sorted;
   }
@@ -65,12 +89,7 @@ class _BudgetPageState extends State<BudgetPage> {
     final amountCtrl =
     TextEditingController(text: existing?.amount?.toString() ?? '');
     final categories = const [
-      'טיסות',
-      'לינה',
-      'אוכל',
-      'תחבורה',
-      'אטרקציות',
-      'אחר',
+      'טיסות', 'לינה', 'אוכל', 'תחבורה', 'אטרקציות', 'אחר',
     ];
     String category = existing?.category ?? categories.first;
     DateTime when = existing?.date ?? DateTime.now();
@@ -88,13 +107,9 @@ class _BudgetPageState extends State<BudgetPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  existing == null ? 'הוספת הוצאה' : 'עריכת הוצאה',
-                  style: Theme.of(ctx).textTheme.titleLarge,
-                ),
+                Text(existing == null ? 'הוספת הוצאה' : 'עריכת הוצאה',
+                    style: Theme.of(ctx).textTheme.titleLarge),
                 const SizedBox(height: 12),
-
-                // קטגוריה
                 DropdownButtonFormField<String>(
                   value: category,
                   decoration: const InputDecoration(
@@ -107,8 +122,6 @@ class _BudgetPageState extends State<BudgetPage> {
                   onChanged: (v) => category = v ?? categories.first,
                 ),
                 const SizedBox(height: 12),
-
-                // סכום
                 TextFormField(
                   controller: amountCtrl,
                   keyboardType:
@@ -125,8 +138,6 @@ class _BudgetPageState extends State<BudgetPage> {
                   },
                 ),
                 const SizedBox(height: 12),
-
-                // הערה
                 TextFormField(
                   controller: noteCtrl,
                   decoration: const InputDecoration(
@@ -136,8 +147,6 @@ class _BudgetPageState extends State<BudgetPage> {
                   maxLines: 2,
                 ),
                 const SizedBox(height: 12),
-
-                // תאריך
                 Row(
                   children: [
                     Expanded(
@@ -162,8 +171,6 @@ class _BudgetPageState extends State<BudgetPage> {
                   ],
                 ),
                 const SizedBox(height: 12),
-
-                // שמירה
                 SizedBox(
                   width: double.infinity,
                   child: FilledButton.icon(
@@ -171,38 +178,28 @@ class _BudgetPageState extends State<BudgetPage> {
                     label: Text(existing == null ? 'הוספה' : 'שמירה'),
                     onPressed: () {
                       if (formKey.currentState?.validate() != true) return;
-                      final amt =
-                      double.parse(amountCtrl.text.replaceAll(',', '.'));
-
+                      final amt = double.parse(amountCtrl.text.replaceAll(',', '.'));
                       if (existing == null) {
                         final item = BudgetExpenseItem(
-                          id: DateTime.now()
-                              .microsecondsSinceEpoch
-                              .toString(),
+                          id: DateTime.now().microsecondsSinceEpoch.toString(),
                           category: category,
                           amount: amt,
-                          note: noteCtrl.text.trim().isEmpty
-                              ? null
-                              : noteCtrl.text.trim(),
+                          note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
                           date: when,
                         );
                         setState(() => _items.insert(0, item));
                       } else {
-                        final idx =
-                        _items.indexWhere((e) => e.id == existing.id);
+                        final idx = _items.indexWhere((e) => e.id == existing.id);
                         if (idx != -1) {
                           _items[idx] = existing.copyWith(
                             category: category,
                             amount: amt,
-                            note: noteCtrl.text.trim().isEmpty
-                                ? null
-                                : noteCtrl.text.trim(),
+                            note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
                             date: when,
                           );
                           setState(() {});
                         }
                       }
-
                       _saveItems();
                       Navigator.pop(ctx);
                     },
@@ -214,6 +211,35 @@ class _BudgetPageState extends State<BudgetPage> {
         );
       },
     );
+  }
+
+  Future<void> _editPlannedFor(String category) async {
+    final ctrl = TextEditingController(
+      text: _planned[category]?.toString() ?? '',
+    );
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('תקציב מתוכנן – $category'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: 'סכום מתוכנן (₪)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('בטל')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('שמירה')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      final v = double.tryParse(ctrl.text.replaceAll(',', '.')) ?? 0;
+      setState(() => _planned[category] = v);
+      await _savePlanned();
+    }
   }
 
   Future<void> _confirmDelete(BudgetExpenseItem item) async {
@@ -244,7 +270,6 @@ class _BudgetPageState extends State<BudgetPage> {
           : ListView(
         padding: const EdgeInsets.fromLTRB(16, 24, 16, 100),
         children: [
-          // סיכום עליון
           Row(
             children: [
               Expanded(child: Text('סה״כ הוצאות', style: t.titleMedium)),
@@ -253,24 +278,36 @@ class _BudgetPageState extends State<BudgetPage> {
           ),
           const SizedBox(height: 12),
 
-          // קיבוץ לפי קטגוריה
           ..._byCategory.entries.map((entry) {
             final cat = entry.key;
             final list = entry.value;
-            final catTotal =
-            list.fold<double>(0, (s, e) => s + (e.amount ?? 0));
+            final catTotal = list.fold<double>(0, (s, e) => s + (e.amount ?? 0));
+            final planned = _planned[cat] ?? 0;
+            final remaining = planned - catTotal;
 
             return Card(
               child: ExpansionTile(
                 title: Text(cat),
-                trailing: Text('₪${catTotal.toStringAsFixed(2)}'),
+                subtitle: planned > 0
+                    ? Text('מתוכנן: ₪${planned.toStringAsFixed(2)} • הוצאות: ₪${catTotal.toStringAsFixed(2)} • יתרה: ₪${remaining.toStringAsFixed(2)}',
+                    style: TextStyle(color: remaining >= 0 ? Colors.teal : Theme.of(context).colorScheme.error))
+                    : Text('הוצאות: ₪${catTotal.toStringAsFixed(2)}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('₪${catTotal.toStringAsFixed(2)}'),
+                    IconButton(
+                      tooltip: 'קבע מתוכנן',
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => _editPlannedFor(cat),
+                    ),
+                  ],
+                ),
                 children: list.map((e) {
                   final subtitle = [
                     if (e.note?.isNotEmpty == true) e.note!,
-                    if (e.date != null)
-                      DateFormat('dd/MM/yyyy').format(e.date!),
+                    if (e.date != null) DateFormat('dd/MM/yyyy').format(e.date!),
                   ].join(' • ');
-
                   return ListTile(
                     title: Text('₪${(e.amount ?? 0).toStringAsFixed(2)}'),
                     subtitle: Text(subtitle),
